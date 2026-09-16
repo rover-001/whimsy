@@ -129,7 +129,7 @@ Configuration is stored in `~/.local/state/omarchy/whimsy/widgets.json` (auto-ma
 ## Marketplace
 
 - **Listing**: [https://omarchyplugins.com/plugin.html?id=whimsy](https://omarchyplugins.com/plugin.html?id=whimsy)
-- **Submission Issue**: [#1](https://github.com/omacom/omarchy-plugin-marketplace/issues/1)
+- **Submission Issue**: [#7180](https://github.com/omacom/omarchy-plugin-marketplace/issues/7180)
 
 
 ---
