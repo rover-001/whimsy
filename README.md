@@ -115,31 +115,11 @@ Configuration is stored in `~/.local/state/omarchy/whimsy/widgets.json` (auto-ma
 ## Marketplace
 
 - **Listing**: [https://omarchyplugins.com/plugin.html?id=whimsy](https://omarchyplugins.com/plugin.html?id=whimsy)
-- **Submission Issue**: [#???
+- **Submission Issue**: [#1](https://github.com/omacom/omarchy-plugin-marketplace/issues/1)
 
 
 ---
 
 ## License
 
-To disable or remove the plugin from Omarchy:
-
-```bash
-# Disable the plugin
-omarchy plugin disable whimsy
-
-# Remove from the Omarchy plugin list
-omarchy plugin remove whimsy
-```
-
-To also remove persisted widget state:
-
-```bash
-rm -rf ~/.local/state/omarchy/whimsy/
-```
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+This project is licensed under the [MIT License](LICENSE).
