@@ -47,6 +47,20 @@ omarchy plugin enable whimsy
 
 ---
 
+## Removal
+
+To disable or remove the plugin from Omarchy:
+
+```bash
+# Disable the plugin
+omarchy plugin disable whimsy
+
+# Remove the plugin
+omarchy plugin remove whimsy
+```
+
+---
+
 ## Usage
 
 ### Bar Pill
