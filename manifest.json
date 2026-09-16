@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "whimsy",
+  "name": "Whimsy",
+  "version": "1.0.0",
+  "author": "rover",
+  "license": "MIT",
+  "description": "A playful collection of desktop widgets for Omarchy: typographic clocks and date displays, analog/flip/cyber clocks, day progress, retro cassette and vinyl music players, four audio visualizers, and volume — all placed as drag-to-desktop widgets.",
+  "keepLoaded": true,
+  "kinds": ["bar-widget", "service"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "service": "Service.qml"
+  },
+  "barWidget": {
+    "displayName": "Whimsy Widgets",
+    "description": "A playful widget suite — clocks, music players, visualizers, date displays, and volume",
+    "category": "Widgets",
+    "allowMultiple": false
+  }
+}
