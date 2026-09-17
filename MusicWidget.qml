@@ -156,7 +156,48 @@ Item {
   readonly property string title: activePlayer && activePlayer.trackTitle ? activePlayer.trackTitle : "Nothing Playing"
   readonly property string artist: activePlayer && activePlayer.trackArtist ? activePlayer.trackArtist : (hasTrack ? "Unknown Artist" : "Desktop Media")
   readonly property string album: activePlayer && activePlayer.trackAlbum ? activePlayer.trackAlbum : ""
-  readonly property string artUrl: activePlayer && activePlayer.trackArtUrl ? activePlayer.trackArtUrl : ""
+  
+  // Safe bounded artwork fetching — non-local art is fetched with strict timeout, byte cap, and bounded dimensions
+  readonly property string fetchArtHelperPath: Qt.resolvedUrl("fetch-art.py").toString().replace(/^file:\/\//, "")
+  readonly property string rawArtUrl: activePlayer && activePlayer.trackArtUrl ? String(activePlayer.trackArtUrl) : ""
+  property string safeArtUrl: ""
+  readonly property string artUrl: safeArtUrl
+
+  function updateArtwork() {
+    var raw = root.rawArtUrl
+    if (!raw) {
+      fetchArtProc.running = false
+      root.safeArtUrl = ""
+      return
+    }
+    fetchArtProc.running = false
+    fetchArtProc.command = ["python3", root.fetchArtHelperPath, raw]
+    fetchArtProc.running = true
+  }
+
+  onRawArtUrlChanged: root.updateArtwork()
+
+  Process {
+    id: fetchArtProc
+    command: ["python3", root.fetchArtHelperPath, ""]
+    running: false
+    stdout: SplitParser {
+      onRead: function(line) {
+        var trimmed = String(line).trim()
+        if (trimmed.startsWith("file://")) {
+          root.safeArtUrl = trimmed
+        } else {
+          root.safeArtUrl = ""
+        }
+      }
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && !root.safeArtUrl.startsWith("file://")) {
+        root.safeArtUrl = ""
+      }
+    }
+  }
+
   readonly property bool playing: activePlayer ? !!activePlayer.isPlaying : false
   property real currentPositionSec: 0
   readonly property real positionSec: currentPositionSec
@@ -209,6 +250,7 @@ Item {
     if (root.activePlayer) {
       root.currentPositionSec = Number(root.activePlayer.position || 0)
     }
+    root.updateArtwork()
   }
 
   Connections {
@@ -303,6 +345,8 @@ Item {
         Image {
           anchors.fill: parent
           source: root.artUrl
+          sourceSize.width: 512
+          sourceSize.height: 512
           fillMode: Image.PreserveAspectCrop
           visible: root.artUrl !== ""
           asynchronous: true
@@ -478,6 +522,8 @@ Item {
         Image {
           anchors.fill: parent
           source: root.artUrl
+          sourceSize.width: 256
+          sourceSize.height: 256
           fillMode: Image.PreserveAspectCrop
           visible: root.artUrl !== ""
           asynchronous: true
@@ -624,6 +670,8 @@ Item {
               id: discArt
               anchors.fill: parent
               source: root.artUrl
+              sourceSize.width: 512
+              sourceSize.height: 512
               fillMode: Image.PreserveAspectCrop
               visible: root.artUrl !== ""
               asynchronous: true

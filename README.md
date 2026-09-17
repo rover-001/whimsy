@@ -115,6 +115,7 @@ Configuration is stored in `~/.local/state/omarchy/whimsy/widgets.json` (auto-ma
 | `VisualizerWidget.qml` | Audio visualizer container: bars, dots, wave, vumeter, radial variants |
 | `visualizer-stream.py` | `pw-record` → FFT → 16-band normalized values pipeline (feeds VisualizerWidget) |
 | `music-info.sh` | MPRIS player resolver — prints TSV title/artist/playing/position/duration for MusicWidget |
+| `fetch-art.py` | Secure artwork fetcher: timeout, byte cap, and bounded thumbnailing cache |
 
 ---
 
