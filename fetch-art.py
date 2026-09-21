@@ -5,11 +5,14 @@ Fetches, bounds, and caches MPRIS track artwork securely.
 
 Security constraints:
 - Fail-closed if PIL (Pillow) is missing or cannot decode the image
-- SSRF protection: all destination IPs (initial URL and every redirect) are validated
-  against a public-address policy — loopback, link-local, ULA, private ranges, and
-  multicast are all rejected after DNS resolution
-- Strict monotonic wall-clock deadline (4.0s) covering connect, redirects, and all
-  response reads
+- DNS-rebinding-safe SSRF protection: hostname is resolved ONCE, the first
+  suitable public IP is validated using ipaddress built-ins AND an explicit
+  denylist, and urllib is directed to connect to that pre-validated IP address
+  directly (so no second independent DNS lookup can occur). Host/SNI are
+  preserved for HTTP and TLS respectively.  Every redirect destination goes
+  through the same single-resolution pipeline before the next hop is opened.
+- Strict monotonic wall-clock deadline (4.0s) covering connect, redirects, and
+  all response reads
 - Strict response byte cap (2 MB)
 - Strict image dimension/pixel bounds via PIL thumbnailing (max 512x512)
 - Rejection of decompression bombs (MAX_IMAGE_PIXELS = 5,000,000)
@@ -26,7 +29,8 @@ import time
 import signal
 import socket
 import ipaddress
-import urllib.request
+import http.client
+import ssl
 import urllib.parse
 import urllib.error
 
@@ -47,83 +51,268 @@ MAX_BOUNDED_SIZE = (512, 512)
 CACHE_MAX_ENTRIES = 200
 CACHE_MAX_BYTES = 100 * 1024 * 1024    # 100 MB total cache ceiling
 
+# Maximum number of redirects to follow
+MAX_REDIRECTS = 5
+
 
 # ---------------------------------------------------------------------------
-# SSRF protection — public-address policy
+# SSRF protection — DNS-rebinding-safe public-address policy
 # ---------------------------------------------------------------------------
 
-# IP network ranges that must never be contacted
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),       # Loopback
-    ipaddress.ip_network("::1/128"),            # IPv6 loopback
-    ipaddress.ip_network("10.0.0.0/8"),         # RFC-1918 private
-    ipaddress.ip_network("172.16.0.0/12"),      # RFC-1918 private
-    ipaddress.ip_network("192.168.0.0/16"),     # RFC-1918 private
-    ipaddress.ip_network("169.254.0.0/16"),     # Link-local (IPv4)
-    ipaddress.ip_network("fe80::/10"),          # Link-local (IPv6)
-    ipaddress.ip_network("fc00::/7"),           # ULA (IPv6)
-    ipaddress.ip_network("0.0.0.0/8"),          # "This" network
-    ipaddress.ip_network("100.64.0.0/10"),      # Shared address (CGNAT)
-    ipaddress.ip_network("192.0.0.0/24"),       # IETF Protocol Assignments
-    ipaddress.ip_network("192.0.2.0/24"),       # TEST-NET-1 (docs)
-    ipaddress.ip_network("198.51.100.0/24"),    # TEST-NET-2 (docs)
-    ipaddress.ip_network("203.0.113.0/24"),     # TEST-NET-3 (docs)
-    ipaddress.ip_network("224.0.0.0/4"),        # IPv4 multicast
-    ipaddress.ip_network("240.0.0.0/4"),        # Reserved
-    ipaddress.ip_network("255.255.255.255/32"), # Broadcast
-    ipaddress.ip_network("ff00::/8"),           # IPv6 multicast
-    ipaddress.ip_network("::ffff:0:0/96"),      # IPv4-mapped IPv6
-    ipaddress.ip_network("::/128"),             # Unspecified IPv6
+# Additional explicit denylist of ranges that ipaddress.is_global() may not
+# classify as non-global on all Python versions (belt-and-suspenders).
+_EXTRA_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("100.64.0.0/10"),      # Shared address space (CGNAT)
+    ipaddress.ip_network("192.0.0.0/24"),        # IETF Protocol Assignments
+    ipaddress.ip_network("192.0.2.0/24"),        # TEST-NET-1 (docs)
+    ipaddress.ip_network("198.51.100.0/24"),     # TEST-NET-2 (docs)
+    ipaddress.ip_network("203.0.113.0/24"),      # TEST-NET-3 (docs)
+    ipaddress.ip_network("240.0.0.0/4"),         # Reserved
+    ipaddress.ip_network("255.255.255.255/32"),  # Broadcast
+    ipaddress.ip_network("::ffff:0:0/96"),       # IPv4-mapped IPv6
+    ipaddress.ip_network("::/128"),              # Unspecified IPv6
 ]
 
 
-def _is_public_ip(ip_str: str) -> bool:
-    """Return True only if ip_str is a routable public-Internet address."""
+def _is_safe_ip(ip_str: str) -> bool:
+    """
+    Return True only if ip_str is a routable, public-Internet address.
+
+    Uses ipaddress built-in predicates (is_global, is_loopback, is_private,
+    is_link_local, is_multicast, is_reserved, is_unspecified) as the primary
+    check, then applies an extra explicit denylist for ranges that is_global()
+    may not handle consistently across Python versions.
+    """
     try:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
-    for net in _BLOCKED_NETWORKS:
-        if addr in net:
-            return False
+
+    # Reject anything that is NOT globally routable by stdlib definition
+    if not addr.is_global:
+        return False
+
+    # Belt-and-suspenders: reject extra ranges stdlib may not catch
+    for net in _EXTRA_BLOCKED_NETWORKS:
+        try:
+            if addr in net:
+                return False
+        except TypeError:
+            pass  # IPv4 vs IPv6 mismatch — not in that network
+
     return True
 
 
-def _hostname_resolves_to_public(hostname: str, port: int = 80) -> bool:
+def _resolve_to_safe_ip(hostname: str, port: int) -> str:
     """
-    Resolve hostname via getaddrinfo and confirm that EVERY returned
-    IP address is a public (non-private/non-loopback) address.
-    Rejects the host if DNS yields zero results or any private address.
+    Resolve hostname via getaddrinfo and return the first IP address that
+    passes _is_safe_ip().  Returns "" if no safe IP is found.
+
+    getaddrinfo is called ONCE here; the returned IP is stored and used
+    directly for the TCP connection so no second DNS resolution occurs.
     """
     try:
-        results = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        results = socket.getaddrinfo(
+            hostname, port,
+            type=socket.SOCK_STREAM,
+            flags=socket.AI_ADDRCONFIG,
+        )
     except socket.gaierror:
-        return False
-    if not results:
-        return False
+        return ""
+
     for family, _type, _proto, _canon, sockaddr in results:
         ip = sockaddr[0]
-        if not _is_public_ip(ip):
-            return False
-    return True
+        if _is_safe_ip(ip):
+            return ip
+
+    return ""
 
 
-def _url_passes_ssrf_check(url: str) -> bool:
+# ---------------------------------------------------------------------------
+# DNS-rebinding-safe HTTP(S) connection helpers
+# ---------------------------------------------------------------------------
+
+def _make_connection(scheme: str, validated_ip: str, hostname: str, port: int,
+                     remaining_seconds: float):
     """
-    Parse url and ensure scheme is http/https, netloc is present, and
-    the host resolves exclusively to public IP addresses.
+    Open an HTTP or HTTPS connection to the pre-validated IP address directly.
+    - For HTTP:  HTTPConnection target is the IP; Host header carries hostname.
+    - For HTTPS: SSLContext check_hostname=True validates against the original
+                 hostname (SNI + cert); the TCP connection goes to the IP.
+    Returns an http.client.HTTPConnection/HTTPSConnection (not yet connected).
     """
+    timeout = min(remaining_seconds, TOTAL_DEADLINE_SECONDS)
+    if scheme == "https":
+        ctx = ssl.create_default_context()
+        # server_hostname makes ssl set SNI and validate the cert against hostname
+        conn = http.client.HTTPSConnection(
+            validated_ip, port, timeout=timeout, context=ctx
+        )
+        # Override the host sent in the TLS handshake so cert validation works
+        conn._tunnel_host = hostname  # ignored for non-CONNECT, safe to set
+        # Directly replace the server_hostname used by ssl.wrap_socket
+        conn._server_hostname = hostname
+    else:
+        conn = http.client.HTTPConnection(validated_ip, port, timeout=timeout)
+    return conn
+
+
+def _fetch_url_once(url: str, start_time: float) -> tuple:
+    """
+    Perform a single (non-redirecting) HTTP/HTTPS GET to url.
+    Returns (status_code, headers_dict, body_bytes) on success,
+    or (None, None, None) on any error.
+
+    The TCP connection is made directly to the pre-validated IP so that
+    no second DNS resolution is ever performed.
+    """
+    elapsed = time.monotonic() - start_time
+    remaining = TOTAL_DEADLINE_SECONDS - elapsed
+    if remaining <= 0:
+        return (None, None, None)
+
     try:
         parsed = urllib.parse.urlparse(url)
     except Exception:
-        return False
-    if parsed.scheme not in ("http", "https"):
-        return False
+        return (None, None, None)
+
+    scheme = parsed.scheme
+    if scheme not in ("http", "https"):
+        return (None, None, None)
+
     hostname = parsed.hostname
     if not hostname:
-        return False
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    return _hostname_resolves_to_public(hostname, port)
+        return (None, None, None)
+
+    port = parsed.port or (443 if scheme == "https" else 80)
+
+    # Single DNS resolution → validated IP; no second lookup after this
+    validated_ip = _resolve_to_safe_ip(hostname, port)
+    if not validated_ip:
+        return (None, None, None)
+
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+
+    try:
+        conn = _make_connection(scheme, validated_ip, hostname, port, remaining)
+        conn.request(
+            "GET", path,
+            headers={
+                "Host": hostname,
+                "User-Agent": "Omarchy-Whimsy/1.0 (ArtworkFetcher)",
+                "Connection": "close",
+            }
+        )
+        resp = conn.getresponse()
+        status = resp.status
+        headers = {k.lower(): v for k, v in resp.getheaders()}
+
+        # Check content-length before reading
+        cl = headers.get("content-length")
+        if cl:
+            try:
+                if int(cl) > MAX_DOWNLOAD_BYTES:
+                    conn.close()
+                    return (status, headers, None)
+            except ValueError:
+                pass
+
+        # Stream the body with monotonic deadline enforcement
+        data = bytearray()
+        while True:
+            elapsed2 = time.monotonic() - start_time
+            if elapsed2 >= TOTAL_DEADLINE_SECONDS:
+                conn.close()
+                return (status, headers, None)
+
+            remaining2 = TOTAL_DEADLINE_SECONDS - elapsed2
+            conn.sock.settimeout(remaining2)
+
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > MAX_DOWNLOAD_BYTES:
+                conn.close()
+                return (status, headers, None)
+
+        conn.close()
+        return (status, headers, bytes(data))
+    except Exception:
+        return (None, None, None)
+
+
+def fetch_remote_image(raw_url: str) -> bytes:
+    """
+    Downloads remote image data enforcing:
+    - DNS-rebinding-safe SSRF: hostname resolved once to a validated public IP,
+      TCP connection made directly to that IP (no second DNS lookup).
+    - Every redirect destination re-validated with the same single-resolution
+      pipeline before the next hop opens.
+    - End-to-end monotonic wall-clock deadline.
+    - Max download size cap (2 MB).
+    - Hard OS-level SIGALRM timer as fail-safe against blocking syscalls.
+    """
+    parsed = urllib.parse.urlparse(raw_url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return b""
+
+    start_time = time.monotonic()
+
+    def _alarm_handler(signum, frame):
+        raise TimeoutError("Total monotonic deadline exceeded")
+
+    old_handler = None
+    has_timer = hasattr(signal, "setitimer") and hasattr(signal, "SIGALRM")
+    if has_timer:
+        try:
+            old_handler = signal.signal(signal.SIGALRM, _alarm_handler)
+            signal.setitimer(signal.ITIMER_REAL, TOTAL_DEADLINE_SECONDS)
+        except Exception:
+            has_timer = False
+
+    try:
+        url = raw_url
+        for _ in range(MAX_REDIRECTS + 1):
+            if time.monotonic() - start_time >= TOTAL_DEADLINE_SECONDS:
+                return b""
+
+            status, headers, body = _fetch_url_once(url, start_time)
+            if status is None:
+                return b""
+
+            if status in (301, 302, 303, 307, 308):
+                location = (headers or {}).get("location", "").strip()
+                if not location:
+                    return b""
+                # Resolve relative redirects
+                url = urllib.parse.urljoin(url, location)
+                # Validate the redirect target (new DNS resolution, new IP check)
+                p = urllib.parse.urlparse(url)
+                if p.scheme not in ("http", "https") or not p.hostname:
+                    return b""
+                continue
+
+            if status == 200 and body is not None:
+                return body
+
+            return b""
+
+        # Exceeded max redirects
+        return b""
+
+    except Exception:
+        return b""
+    finally:
+        if has_timer:
+            try:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                if old_handler is not None:
+                    signal.signal(signal.SIGALRM, old_handler)
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -150,18 +339,17 @@ def _evict_cache_if_needed(cache_dir: str) -> None:
             except OSError:
                 continue
 
-        # Sort ascending by last-access time (least recently used first)
         entries.sort(key=lambda e: e[0])
 
         while entries and (len(entries) > CACHE_MAX_ENTRIES or total_bytes > CACHE_MAX_BYTES):
-            atime, size, path = entries.pop(0)
+            _atime, size, path = entries.pop(0)
             try:
                 os.remove(path)
                 total_bytes -= size
             except OSError:
                 pass
     except Exception:
-        pass  # Never crash on eviction
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -177,11 +365,9 @@ def get_cache_dir() -> str:
 def process_and_save_image(image_data_or_path, out_file: str) -> bool:
     """
     Decodes and verifies image data using PIL.
-    Enforces decompression bomb limit (MAX_IMAGE_PIXELS) and downscales
-    to MAX_BOUNDED_SIZE (512x512) before atomically writing as PNG.
-    Fails closed (returns False) on any decoding error, decompression bomb,
-    or unsupported format.  NEVER caches or returns unvalidated raw bytes.
-    After a successful write, triggers LRU eviction to enforce cache quota.
+    Enforces decompression bomb limit and downscales to MAX_BOUNDED_SIZE.
+    Fails closed on any decode error.  After a successful write, triggers
+    LRU eviction to enforce the cache quota.
     """
     tmp_file = f"{out_file}.tmp.{os.getpid()}"
     try:
@@ -207,121 +393,6 @@ def process_and_save_image(image_data_or_path, out_file: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Remote fetch with monotonic deadline + SSRF-filtered redirect handler
-# ---------------------------------------------------------------------------
-
-class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """
-    Intercepts every redirect and re-validates the new destination URL against
-    the SSRF public-address policy before following it.  Also aborts if the
-    monotonic wall-clock deadline has been exceeded.
-    """
-
-    def __init__(self, start_time: float, deadline: float):
-        super().__init__()
-        self.start_time = start_time
-        self.deadline = deadline
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        # Abort if the total wall-clock deadline has been exceeded
-        if time.monotonic() - self.start_time >= self.deadline:
-            return None
-        # Re-validate the redirect target against the public-address policy
-        if not _url_passes_ssrf_check(newurl):
-            return None
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
-def fetch_remote_image(raw_url: str) -> bytes:
-    """
-    Downloads remote image data enforcing:
-    - SSRF check: initial destination must resolve to a public IP address.
-    - SSRF check: every redirect destination re-checked by _SafeRedirectHandler.
-    - End-to-end monotonic wall-clock deadline (4.0s) spanning connection,
-      all redirects, and the entire response read loop.
-    - Max download size cap (2 MB).
-    - Hard OS-level timer (signal.setitimer) as fail-safe against blocking syscalls.
-    """
-    # Validate initial URL before opening any connection
-    if not _url_passes_ssrf_check(raw_url):
-        return b""
-
-    start_time = time.monotonic()
-    opener = urllib.request.build_opener(
-        _SafeRedirectHandler(start_time, TOTAL_DEADLINE_SECONDS)
-    )
-
-    req = urllib.request.Request(
-        raw_url,
-        headers={"User-Agent": "Omarchy-Whimsy/1.0 (ArtworkFetcher)"}
-    )
-
-    def _alarm_handler(signum, frame):
-        raise TimeoutError("Total monotonic deadline exceeded")
-
-    old_handler = None
-    has_timer = hasattr(signal, "setitimer") and hasattr(signal, "SIGALRM")
-    if has_timer:
-        try:
-            old_handler = signal.signal(signal.SIGALRM, _alarm_handler)
-            signal.setitimer(signal.ITIMER_REAL, TOTAL_DEADLINE_SECONDS)
-        except Exception:
-            has_timer = False
-
-    try:
-        remaining = TOTAL_DEADLINE_SECONDS - (time.monotonic() - start_time)
-        if remaining <= 0:
-            return b""
-
-        with opener.open(req, timeout=remaining) as response:
-            content_length = response.headers.get("Content-Length")
-            if content_length:
-                try:
-                    if int(content_length) > MAX_DOWNLOAD_BYTES:
-                        return b""
-                except ValueError:
-                    pass
-
-            data = bytearray()
-            while True:
-                elapsed = time.monotonic() - start_time
-                if elapsed >= TOTAL_DEADLINE_SECONDS:
-                    return b""
-
-                remaining = TOTAL_DEADLINE_SECONDS - elapsed
-                if remaining <= 0:
-                    return b""
-
-                # Dynamically clamp socket timeout to remaining deadline
-                try:
-                    sock = getattr(response, "fp", None)
-                    if sock and hasattr(sock, "raw") and hasattr(sock.raw, "_sock") and sock.raw._sock:
-                        sock.raw._sock.settimeout(remaining)
-                except Exception:
-                    pass
-
-                chunk = response.read(65536)
-                if not chunk:
-                    break
-
-                data.extend(chunk)
-                if len(data) > MAX_DOWNLOAD_BYTES:
-                    return b""
-
-            return bytes(data)
-    except Exception:
-        return b""
-    finally:
-        if has_timer:
-            try:
-                signal.setitimer(signal.ITIMER_REAL, 0)
-                if old_handler is not None:
-                    signal.signal(signal.SIGALRM, old_handler)
-            except Exception:
-                pass
-
-
-# ---------------------------------------------------------------------------
 # Main resolver
 # ---------------------------------------------------------------------------
 
@@ -336,9 +407,8 @@ def resolve_art(raw_url: str) -> str:
     url_hash = hashlib.sha256(raw_url.encode("utf-8")).hexdigest()[:24]
     cached_file = os.path.join(cache_dir, f"{url_hash}.png")
 
-    # If already cached and non-empty, return immediately
+    # If already cached and non-empty, return immediately (touch atime for LRU)
     if os.path.isfile(cached_file) and os.path.getsize(cached_file) > 0:
-        # Touch atime for LRU tracking
         try:
             os.utime(cached_file, None)
         except OSError:
@@ -364,7 +434,7 @@ def resolve_art(raw_url: str) -> str:
             return f"file://{cached_file}"
         return ""
 
-    # Handle remote URLs (http:// or https://) — full SSRF check applied
+    # Handle remote URLs (http:// or https://) — DNS-rebinding-safe SSRF applied
     if raw_url.startswith("http://") or raw_url.startswith("https://"):
         data = fetch_remote_image(raw_url)
         if data and process_and_save_image(data, cached_file):

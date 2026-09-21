@@ -115,7 +115,7 @@ Configuration is stored in `~/.local/state/omarchy/whimsy/widgets.json` (auto-ma
 | `VisualizerWidget.qml` | Audio visualizer container: bars, dots, wave, vumeter, radial variants |
 | `visualizer-stream.py` | `pw-record` → FFT → 16-band normalized values pipeline (feeds VisualizerWidget) |
 | `music-info.sh` | MPRIS player resolver — prints TSV title/artist/playing/position/duration for MusicWidget |
-| `fetch-art.py` | Secure artwork fetcher: SSRF-safe (all destinations and redirects validated against a public-address policy after DNS resolution), monotonic deadline, byte cap, Pillow bounded thumbnailing, and LRU cache with a 200-entry / 100 MB quota |
+| `fetch-art.py` | Secure artwork fetcher: DNS-rebinding-safe SSRF protection (hostname resolved once, TCP connects directly to the validated IP; `ipaddress.is_global` + explicit denylist; every redirect hop re-resolved independently), monotonic end-to-end deadline, 2 MB byte cap, Pillow fail-closed decode with dimension bounding, and LRU cache with 200-entry / 100 MB quota |
 
 ---
 
