@@ -115,7 +115,7 @@ Configuration is stored in `~/.local/state/omarchy/whimsy/widgets.json` (auto-ma
 | `VisualizerWidget.qml` | Audio visualizer container: bars, dots, wave, vumeter, radial variants |
 | `visualizer-stream.py` | `pw-record` → FFT → 16-band normalized values pipeline (feeds VisualizerWidget) |
 | `music-info.sh` | MPRIS player resolver — prints TSV title/artist/playing/position/duration for MusicWidget |
-| `fetch-art.py` | Secure artwork fetcher: monotonic deadline, byte cap, and Pillow bounded thumbnailing cache |
+| `fetch-art.py` | Secure artwork fetcher: SSRF-safe (all destinations and redirects validated against a public-address policy after DNS resolution), monotonic deadline, byte cap, Pillow bounded thumbnailing, and LRU cache with a 200-entry / 100 MB quota |
 
 ---
 
@@ -125,7 +125,7 @@ Configuration is stored in `~/.local/state/omarchy/whimsy/widgets.json` (auto-ma
 - Quickshell
 - PipeWire (`pw-record` for the audio visualizer)
 - Python 3 (`python3`)
-- `python-pillow` (`pillow >= 10.0.0`) — runtime dependency required for validating MPRIS artwork decoding, bounding image dimensions, and preventing decompression bombs
+- `python-pillow` (`pillow >= 10.0.0`) — mandatory runtime dependency for MPRIS artwork decode validation, dimension bounding, and decompression-bomb rejection
 
 ---
 
