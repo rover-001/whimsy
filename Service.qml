@@ -105,6 +105,7 @@ Item {
       y: 0,
       scale: 1,
       locked: false,
+      rotation: 0,
       center: true
     }
     var list = root.widgets.slice()
@@ -139,6 +140,21 @@ Item {
     for (var i = 0; i < list.length; i++) {
       if (list[i].id === id && Number(list[i].scale || 1) !== scale) {
         list[i].scale = scale
+        changed = true
+      }
+    }
+    if (!changed) return
+    root.widgets = list
+    save()
+  }
+
+  function cardRotated(id, angle) {
+    angle = Number(angle) || 0
+    var list = root.widgets.slice()
+    var changed = false
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id === id) {
+        list[i].rotation = angle
         changed = true
       }
     }
@@ -250,7 +266,8 @@ Item {
         x: Number(e.x),
         y: Number(e.y),
         scale: Math.max(0.4, Math.min(3, Number(e.scale || 1))),
-        locked: e.locked === true
+        locked: e.locked === true,
+        rotation: Number(e.rotation) || 0
       })
       if (e.center === true) list[list.length - 1].center = true
     }

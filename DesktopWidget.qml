@@ -17,6 +17,8 @@ PanelWindow {
   // Which card currently shows its chrome (dotted box, resize dot, remove ✕).
   // Clicking empty desktop clears it; clicking a card selects it.
   property string selectedId: ""
+  // Set true by editable widgets (e.g. StickyNote) while keyboard is needed.
+  property bool keyboardActive: false
   property Component cardComponent: Qt.createComponent(
     Qt.resolvedUrl("DesktopCard.qml"), Component.PreferSynchronous)
 
@@ -27,7 +29,7 @@ PanelWindow {
 
   WlrLayershell.namespace: "whimsy-widget"
   WlrLayershell.layer: WlrLayer.Bottom
-  WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+  WlrLayershell.keyboardFocus: layer.keyboardActive ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
 
   // First declared child — cards created later stack above it. Any press that
   // does NOT land on a card lands here and clears the selection.
@@ -71,6 +73,7 @@ PanelWindow {
       startY: entry.y,
       textScale: Number(entry.scale || 1),
       locked: entry.locked === true,
+      startRotation: Number(entry.rotation) || 0,
       centerOnStart: entry.center === true
     })
     if (!card) {

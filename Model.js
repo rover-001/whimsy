@@ -15,7 +15,9 @@ var CATEGORIES = [
   { id: "time",       name: "Time" },
   { id: "date",       name: "Date" },
   { id: "media",      name: "Media" },
-  { id: "visualizer", name: "Visualizer" }
+  { id: "visualizer", name: "Visualizer" },
+  { id: "system",     name: "System" },
+  { id: "weather",    name: "Weather" }
 ]
 
 // ---- text-based date/time styles (rendered by DayFace) -------------------
@@ -459,14 +461,91 @@ var WIDGET_STYLES = [
     variant: "vumeter",
     hiddenFromPanel: true
   },
+  // System Telemetry (Category: system)
+  // 1. Individual Pills
   {
-    id: "visualizer-mirror",
-    category: "visualizer",
-    name: "Symmetric Spectrum",
-    kind: "visualizer",
-    variant: "mirror",
-    hiddenFromPanel: true
-  }
+    id: "sys-pill-cpu",
+    category: "system",
+    name: "CPU Pill",
+    desc: "Compact frosted glass pill with live CPU usage bar and core temperature",
+    kind: "system",
+    variant: "pill-cpu"
+  },
+  {
+    id: "sys-pill-ram",
+    category: "system",
+    name: "RAM Pill",
+    desc: "Compact frosted glass pill with live RAM usage bar and memory in GB",
+    kind: "system",
+    variant: "pill-ram"
+  },
+  {
+    id: "sys-pill-gpu",
+    category: "system",
+    name: "GPU Pill",
+    desc: "Compact frosted glass pill with live GPU usage bar and GPU temperature",
+    kind: "system",
+    variant: "pill-gpu"
+  },
+  {
+    id: "sys-pill-temps",
+    category: "system",
+    name: "CPU + GPU Temps Pill",
+    desc: "Unified frosted dual-temperature pill showing live CPU and GPU temps together",
+    kind: "system",
+    variant: "pill-temps"
+  },
+  // 2. Individual Ring Blocks
+  {
+    id: "sys-ring-cpu",
+    category: "system",
+    name: "CPU Ring Block",
+    desc: "Clean acrylic card with radial progress arc and core temperature",
+    kind: "system",
+    variant: "ring-cpu"
+  },
+  {
+    id: "sys-ring-ram",
+    category: "system",
+    name: "RAM Ring Block",
+    desc: "Clean acrylic card with radial progress arc and used memory in GB",
+    kind: "system",
+    variant: "ring-ram"
+  },
+  {
+    id: "sys-ring-gpu",
+    category: "system",
+    name: "GPU Ring Block",
+    desc: "Clean acrylic card with radial progress arc and GPU temperature",
+    kind: "system",
+    variant: "ring-gpu"
+  },
+
+  // Weather (Category: weather)
+  {
+    id: "weather-pill",
+    category: "weather",
+    name: "Weather Capsule",
+    desc: "Frosted weather capsule with outdoor temp, glyph, and wind speed",
+    kind: "weather",
+    variant: "pill"
+  },
+  {
+    id: "weather-editorial",
+    category: "weather",
+    name: "Weather Editorial",
+    desc: "Clean modern typographic card with prominent temperature and condition tags",
+    kind: "weather",
+    variant: "editorial"
+  },
+  {
+    id: "weather-minimal",
+    category: "weather",
+    name: "Weather Minimal Text",
+    desc: "Ultra clean transparent text banner with live weather glyph and temperature",
+    kind: "weather",
+    variant: "minimal"
+  },
 ]
 
 // ---- lookups ---------------------------------------------------------------

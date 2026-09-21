@@ -288,6 +288,40 @@ Panel {
               fillColor: Color.accent
               fgColor: root.barForeground
             }
+
+            // System telemetry widget
+            SystemWidget {
+              id: previewSystem
+              anchors.centerIn: parent
+              visible: root.currentWidget && root.currentWidget.kind === "system"
+              variant: root.currentWidget ? (root.currentWidget.variant || "pill-cpu") : "pill-cpu"
+              active: root.opened
+              widgetScale: {
+                if (!root.currentWidget) return 1
+                var v = root.currentWidget.variant
+                if (v && v.indexOf("pill-") === 0) return 1.15
+                if (v && v.indexOf("ring-") === 0) return 0.95
+                return 1
+              }
+              fgColor: root.barForeground
+              accentColor: Color.accent
+            }
+
+            // Weather widgets
+            WeatherPill {
+              id: previewWeatherPill
+              anchors.centerIn: parent
+              visible: root.currentWidget && root.currentWidget.kind === "weather"
+              variant: root.currentWidget ? (root.currentWidget.variant || "pill") : "pill"
+              active: root.opened
+              widgetScale: {
+                if (!root.currentWidget) return 1
+                if (root.currentWidget.variant === "editorial") return 0.9
+                return 1.05
+              }
+              fgColor: root.barForeground
+              accentColor: Color.accent
+            }
           }
 
           // Direct click to place widget on desktop

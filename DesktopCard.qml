@@ -24,9 +24,14 @@ Item {
   required property real startX
   required property real startY
   property real textScale: 1
+  property real startRotation: 0
   property bool centerOnStart: false
   property bool selected: false
   property bool locked: false
+
+  // Apply rotation around the card's own centre
+  rotation: startRotation
+  transformOrigin: Item.Center
 
   readonly property var widgetStyle: Model.styleFor(styleId)
   readonly property string widgetKind: widgetStyle.kind || "text"
@@ -47,6 +52,10 @@ Item {
     if (card.widgetKind === "flip") return flipFace.width + pad * 2
     if (card.widgetKind === "cyber") return cyberFace.width + pad * 2
     if (card.widgetKind === "progress") return progressFace.width + pad * 2
+    if (card.widgetKind === "system") return systemFace.width + pad * 2
+    if (card.widgetKind === "weather") {
+      return weatherFace.width + pad * 2
+    }
     return Math.max(face.implicitWidth + pad * 2, Style.space(56))
   }
   height: {
@@ -57,6 +66,10 @@ Item {
     if (card.widgetKind === "flip") return flipFace.height + pad * 2
     if (card.widgetKind === "cyber") return cyberFace.height + pad * 2
     if (card.widgetKind === "progress") return progressFace.height + pad * 2
+    if (card.widgetKind === "system") return systemFace.height + pad * 2
+    if (card.widgetKind === "weather") {
+      return weatherFace.height + pad * 2
+    }
     return Math.max(face.implicitHeight + pad * 2, Style.space(56))
   }
 
@@ -208,6 +221,31 @@ Item {
     accentColor: Color.accent
     fgColor: Color.foreground
   }
+
+  // ---- system telemetry widget ------------------------------------------
+  SystemWidget {
+    id: systemFace
+    anchors.centerIn: parent
+    visible: card.widgetKind === "system"
+    variant: card.widgetVariant || "pill-cpu"
+    active: visible
+    widgetScale: card.textScale
+    accentColor: Color.accent
+    fgColor: Color.foreground
+  }
+
+  // ---- weather widgets -------------------------------------------------
+  WeatherPill {
+    id: weatherFace
+    anchors.centerIn: parent
+    visible: card.widgetKind === "weather"
+    variant: card.widgetVariant || "pill"
+    active: visible
+    widgetScale: card.textScale
+    accentColor: Color.accent
+    fgColor: Color.foreground
+  }
+
 
   // NB: MouseArea.hovered is undefined in this Qt build — use a HoverHandler.
   readonly property bool hovered: cardHover.hovered
@@ -468,5 +506,71 @@ Item {
 
   function removeRequested() {
     if (card.service) card.service.removeWidget(card.widgetId)
+  }
+
+  // ---- rotate handle (bottom-left, shown on hover or when selected) ------
+  Rectangle {
+    id: rotateDot
+    z: 10
+    x: -rotateDot.width / 2
+    y: card.height - rotateDot.height / 2
+    visible: (card.hovered || card.selected) && !card.locked
+    opacity: visible ? 1 : 0
+    Behavior on opacity { NumberAnimation { duration: 120 } }
+    width: Style.space(16)
+    height: Style.space(16)
+    radius: width / 2
+    color: Util.alpha(Color.popups.background, 0.9)
+    border.width: 1
+    border.color: Util.alpha(Color.foreground, 0.35)
+
+    // Circular arrow icon
+    Text {
+      anchors.centerIn: parent
+      text: "↻"
+      color: Color.foreground
+      font.pixelSize: Style.space(9)
+      renderType: Text.NativeRendering
+    }
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      acceptedButtons: Qt.NoButton
+      cursorShape: Qt.CrossCursor
+    }
+
+    DragHandler {
+      id: rotator
+      target: null
+      acceptedButtons: Qt.LeftButton
+      enabled: card.inputReady && !card.locked
+      grabPermissions: PointerHandler.CanTakeOverFromItems
+        | PointerHandler.CanTakeOverFromHandlersOfSameType
+
+      property real startAngle: 0
+
+      onActiveChanged: {
+        if (rotator.active) {
+          // Angle from card center to pointer at drag start
+          var cp = rotator.centroid.scenePosition
+          var cx = card.x + card.width  / 2
+          var cy = card.y + card.height / 2
+          rotator.startAngle = Math.atan2(cp.y - cy, cp.x - cx) * 180 / Math.PI - card.rotation
+        } else {
+          // Persist on release
+          if (card.service && typeof card.service.cardRotated === "function")
+            card.service.cardRotated(card.widgetId, card.rotation)
+        }
+      }
+      onCentroidChanged: {
+        if (!rotator.active) return
+        var cp = rotator.centroid.scenePosition
+        var cx = card.x + card.width  / 2
+        var cy = card.y + card.height / 2
+        var angle = Math.atan2(cp.y - cy, cp.x - cx) * 180 / Math.PI - rotator.startAngle
+        card.rotation = ((angle % 360) + 360) % 360
+      }
+    }
   }
 }
