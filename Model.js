@@ -328,15 +328,14 @@ var WIDGET_STYLES = [
     kind: "analog",
     variant: "station"
   },
-  // Legacy analog styles:
   {
     id: "analog-minimal",
     category: "time",
     name: "Nordic Minimal",
     kind: "analog",
-    variant: "minimal",
-    hiddenFromPanel: true
+    variant: "minimal"
   },
+  // Legacy analog styles:
   {
     id: "analog-classic",
     category: "time",

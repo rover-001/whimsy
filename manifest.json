@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "whimsy",
   "name": "Whimsy",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "rover",
   "license": "MIT",
   "description": "A playful collection of desktop widgets for Omarchy: typographic clocks and date displays, analog/flip/cyber clocks, day progress, retro cassette and vinyl music players, audio visualizers, volume, hardware telemetry pills/rings, and weather styles — all placed as drag-to-desktop widgets.",
