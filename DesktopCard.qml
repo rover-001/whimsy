@@ -113,14 +113,8 @@ Item {
       card.service.cardMoved(card.widgetId, x, y)
   }
 
-  // Ignore map-time synthetic pointer bursts until the surface settles.
-  property bool inputReady: false
-  Timer {
-    id: settleTimer
-    interval: 1200
-    running: true
-    onTriggered: card.inputReady = true
-  }
+  // Responsive input readiness
+  property bool inputReady: true
 
     // ---- text-based widget (DayFace) ------------------------------------
   DayFace {
@@ -247,13 +241,16 @@ Item {
   }
 
 
-  // NB: MouseArea.hovered is undefined in this Qt build — use a HoverHandler.
-  readonly property bool hovered: cardHover.hovered
-    || removeArea.containsMouse || resizeArea.containsMouse
-
   HoverHandler {
     id: cardHover
   }
+
+  readonly property bool hovered: cardHover.hovered
+    || (typeof cardDragArea !== "undefined" && cardDragArea.containsMouse)
+    || (typeof removeArea !== "undefined" && removeArea.containsMouse)
+    || (typeof resizeArea !== "undefined" && resizeArea.containsMouse)
+    || (typeof lockArea !== "undefined" && lockArea.containsMouse)
+    || (typeof rotateArea !== "undefined" && rotateArea.containsMouse)
 
   // ---- dotted box (shown on hover or when selected) -----------------------
   Shape {
@@ -282,10 +279,11 @@ Item {
   // ---- lock handle (left of the remove handle) -------------------------
   Rectangle {
     id: lockHandle
+    z: 30
     x: removeHandle.x - Style.space(20)
     y: removeHandle.y
-    width: Style.space(16)
-    height: Style.space(16)
+    width: Style.space(18)
+    height: Style.space(18)
     radius: width / 2
     visible: card.hovered || card.selected
     opacity: (card.hovered || card.selected) ? 1 : 0
@@ -335,11 +333,9 @@ Item {
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       onClicked: {
-        if (card.inputReady) {
-          card.locked = !card.locked
-          if (card.service && typeof card.service.cardLocked === "function") {
-            card.service.cardLocked(card.widgetId, card.locked)
-          }
+        card.locked = !card.locked
+        if (card.service && typeof card.service.cardLocked === "function") {
+          card.service.cardLocked(card.widgetId, card.locked)
         }
       }
     }
@@ -348,20 +344,21 @@ Item {
   // ---- remove handle (top-right, overhangs like the resize dot) ----------
   Rectangle {
     id: removeHandle
+    z: 30
     // Center on the card's top-right corner so half hangs out, mirroring the
     // white resize dot at the bottom-right. Shown on hover (always) and
     // fully visible whenever the card is selected.
     x: card.width - removeHandle.width / 2
     y: -removeHandle.height / 2
-    width: Style.space(16)
-    height: Style.space(16)
+    width: Style.space(20)
+    height: Style.space(20)
     radius: width / 2
     visible: card.hovered || card.selected
-    opacity: card.hovered ? 1 : (card.selected ? 0.85 : 0)
+    opacity: card.hovered ? 1 : (card.selected ? 0.95 : 0)
     Behavior on opacity { NumberAnimation { duration: 120 } }
-    color: Util.alpha(Color.popups.background, 0.9)
-    border.width: 1
-    border.color: Util.alpha(Color.urgent, 0.5)
+    color: Util.alpha(Color.popups.background, 0.95)
+    border.width: 1.5
+    border.color: Color.urgent
 
     Text {
       textFormat: Text.PlainText
@@ -370,6 +367,7 @@ Item {
       color: Color.urgent
       font.family: Style.font.family
       font.pixelSize: Style.font.caption
+      font.bold: true
       renderType: Text.NativeRendering
     }
 
@@ -378,16 +376,16 @@ Item {
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onClicked: { if (card.inputReady) card.removeRequested() }
+      onClicked: card.removeRequested()
     }
   }
 
-// ---- resize dot (bottom-right, shown on hover or when selected) --------
+  // ---- resize dot (bottom-right, shown on hover or when selected) --------
   // Press and drag it outward to extend / shrink the widget (vector text,
   // so it stays crisp at any size).
   Rectangle {
     id: resizeDot
-    z: 10
+    z: 30
     // Center the dot on the card's bottom-right corner so half sits inside
     // and half hangs out — the natural "grab here to resize" affordance.
     x: card.width - resizeDot.width / 2
@@ -411,96 +409,73 @@ Item {
       color: Color.popups.background
     }
 
-    // Hover-only (no acceptedButtons) so it does not steal the press from
-    // the DragHandler that actually performs the resize.
     MouseArea {
       id: resizeArea
       anchors.fill: parent
       hoverEnabled: true
-      acceptedButtons: Qt.NoButton
-      cursorShape: Qt.SizeFDiagCursor
-    }
-
-    DragHandler {
-      id: resizer
-      target: null
       acceptedButtons: Qt.LeftButton
-      enabled: card.inputReady && !card.locked
-      // Does NOT approve being taken over by the card's move DragHandler,
-      // so a press on the corner always stays the resize grab.
-      grabPermissions: PointerHandler.CanTakeOverFromItems
-        | PointerHandler.CanTakeOverFromHandlersOfSameType
-      property real startScale
-      property point startPoint
+      cursorShape: Qt.SizeFDiagCursor
+      property real startScale: 1
+      property real startSceneX: 0
+      property real startSceneY: 0
+      property bool active: false
 
-      onActiveChanged: {
-        if (resizer.active) {
-          // User grabbed the resize handle — stop auto-centering so the
-          // widget grows in place instead of snapping back to screen center
-          // on every size change.
-          card.keepCentered = false
-          resizer.startScale = card.textScale
-          resizer.startPoint = resizer.centroid.scenePosition
-        } else if (!resizer.active && card.service && typeof card.service.cardResized === "function") {
-          card.service.cardResized(card.widgetId, card.textScale)
+      onPressed: function(mouse) {
+        if (card.locked) return
+        active = true
+        card.keepCentered = false
+        startScale = card.textScale
+        var pt = mapToItem(null, mouse.x, mouse.y)
+        startSceneX = pt.x
+        startSceneY = pt.y
+      }
+      onPositionChanged: function(mouse) {
+        if (!active || card.locked) return
+        var pt = mapToItem(null, mouse.x, mouse.y)
+        var dx = pt.x - startSceneX
+        var dy = pt.y - startSceneY
+        var delta = dx + dy
+        card.textScale = Math.max(0.4, Math.min(3.0, startScale * (1 + delta / 160)))
+      }
+      onReleased: function() {
+        if (active) {
+          active = false
+          if (card.service && typeof card.service.cardResized === "function") {
+            card.service.cardResized(card.widgetId, card.textScale)
+          }
         }
       }
-      onCentroidChanged: function() {
-        if (!resizer.active) return
-        var p = resizer.centroid.scenePosition
-        var dx = p.x - resizer.startPoint.x
-        var dy = p.y - resizer.startPoint.y
-        // Drag outward (right/down) to grow, inward to shrink.
-        var delta = dx + dy
-        card.textScale = Math.max(0.4, Math.min(3, resizer.startScale * (1 + delta / 160)))
-      }
     }
   }
 
+  // ---- card body drag & click area ---------------------------------------
   MouseArea {
-    id: hoverArea
+    id: cardDragArea
+    z: 1
     anchors.fill: parent
-    hoverEnabled: false
-    acceptedButtons: Qt.RightButton
-    onPressed: { if (card.inputReady && mouse.button === Qt.RightButton) card.removeRequested() }
-  }
+    hoverEnabled: true
+    acceptedButtons: Qt.LeftButton | Qt.RightButton
+    cursorShape: card.locked ? Qt.ArrowCursor : (drag.active ? Qt.ClosedHandCursor : Qt.OpenHandCursor)
 
-  // A plain click (press + release without drag) selects the card so its
-  // chrome shows. Drags are left to the dragger below.
-  TapHandler {
-    acceptedButtons: Qt.LeftButton
-    enabled: card.inputReady
-    onTapped: card.grabSelect()
-  }
+    drag.target: card.locked ? null : card
+    drag.axis: Drag.XAndYAxis
+    drag.smoothed: false
 
-  // ---- drag to move ------------------------------------------------------
-  property point dragStartPoint
-  property point dragStartPos
-
-  DragHandler {
-    id: dragger
-    target: null
-    acceptedButtons: Qt.LeftButton
-    enabled: card.inputReady && !card.locked
-    // Never compete with the corner resize handler — a press aimed at the
-    // resize dot must go to the resizer, not start moving the card.
-    grabPermissions: PointerHandler.CanTakeOverFromItems
-    onActiveChanged: {
-      if (dragger.active) {
-        // User grabbed the body — stop auto-centering, this card is now
-        // positioned by hand.
+    onPressed: function(mouse) {
+      if (mouse.button === Qt.RightButton) {
+        card.removeRequested()
+        return
+      }
+      if (mouse.button === Qt.LeftButton) {
+        card.grabSelect()
         card.keepCentered = false
-        card.dragStartPoint = dragger.centroid.scenePosition
-        card.dragStartPos = Qt.point(card.x, card.y)
-      } else if (!dragger.active) {
+      }
+    }
+
+    onReleased: function(mouse) {
+      if (mouse.button === Qt.LeftButton) {
         card.settleAround()
       }
-    }
-    onCentroidChanged: function() {
-      if (!dragger.active) return
-      var p = dragger.centroid.scenePosition
-      card.x = Math.max(0, card.dragStartPos.x + (p.x - card.dragStartPoint.x))
-      card.y = Math.max(0, card.dragStartPos.y + (p.y - card.dragStartPoint.y))
     }
   }
 
@@ -511,7 +486,7 @@ Item {
   // ---- rotate handle (bottom-left, shown on hover or when selected) ------
   Rectangle {
     id: rotateDot
-    z: 10
+    z: 30
     x: -rotateDot.width / 2
     y: card.height - rotateDot.height / 2
     visible: (card.hovered || card.selected) && !card.locked
@@ -534,42 +509,35 @@ Item {
     }
 
     MouseArea {
+      id: rotateArea
       anchors.fill: parent
       hoverEnabled: true
-      acceptedButtons: Qt.NoButton
-      cursorShape: Qt.CrossCursor
-    }
-
-    DragHandler {
-      id: rotator
-      target: null
       acceptedButtons: Qt.LeftButton
-      enabled: card.inputReady && !card.locked
-      grabPermissions: PointerHandler.CanTakeOverFromItems
-        | PointerHandler.CanTakeOverFromHandlersOfSameType
-
+      cursorShape: Qt.CrossCursor
       property real startAngle: 0
+      property bool active: false
 
-      onActiveChanged: {
-        if (rotator.active) {
-          // Angle from card center to pointer at drag start
-          var cp = rotator.centroid.scenePosition
-          var cx = card.x + card.width  / 2
-          var cy = card.y + card.height / 2
-          rotator.startAngle = Math.atan2(cp.y - cy, cp.x - cx) * 180 / Math.PI - card.rotation
-        } else {
-          // Persist on release
-          if (card.service && typeof card.service.cardRotated === "function")
-            card.service.cardRotated(card.widgetId, card.rotation)
-        }
+      onPressed: function(mouse) {
+        if (card.locked) return
+        active = true
+        var sceneP = mapToItem(null, mouse.x, mouse.y)
+        var centerScene = card.mapToItem(null, card.width / 2, card.height / 2)
+        startAngle = Math.atan2(sceneP.y - centerScene.y, sceneP.x - centerScene.x) * 180 / Math.PI - card.rotation
       }
-      onCentroidChanged: {
-        if (!rotator.active) return
-        var cp = rotator.centroid.scenePosition
-        var cx = card.x + card.width  / 2
-        var cy = card.y + card.height / 2
-        var angle = Math.atan2(cp.y - cy, cp.x - cx) * 180 / Math.PI - rotator.startAngle
+      onPositionChanged: function(mouse) {
+        if (!active || card.locked) return
+        var sceneP = mapToItem(null, mouse.x, mouse.y)
+        var centerScene = card.mapToItem(null, card.width / 2, card.height / 2)
+        var angle = Math.atan2(sceneP.y - centerScene.y, sceneP.x - centerScene.x) * 180 / Math.PI - startAngle
         card.rotation = ((angle % 360) + 360) % 360
+      }
+      onReleased: function() {
+        if (active) {
+          active = false
+          if (card.service && typeof card.service.cardRotated === "function") {
+            card.service.cardRotated(card.widgetId, card.rotation)
+          }
+        }
       }
     }
   }

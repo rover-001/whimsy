@@ -35,7 +35,9 @@ PanelWindow {
   // does NOT land on a card lands here and clears the selection.
   MouseArea {
     id: clearSelectArea
+    z: 0
     anchors.fill: parent
+    enabled: layer.selectedId !== ""
     acceptedButtons: Qt.LeftButton | Qt.RightButton
     onClicked: layer.selectedId = ""
   }
@@ -74,7 +76,8 @@ PanelWindow {
       textScale: Number(entry.scale || 1),
       locked: entry.locked === true,
       startRotation: Number(entry.rotation) || 0,
-      centerOnStart: entry.center === true
+      centerOnStart: entry.center === true,
+      z: 10
     })
     if (!card) {
       console.warn("whimsy: DesktopWidget createObject failed")
